@@ -3,12 +3,13 @@ import { Gem, LayoutDashboard, Package, Plus, Search, Download, Upload, BookOpen
 
 type Stone = {id:string; code:string; name:string; stage:string; status:string; carats:number; color:string; clarity:string; origin:string; treatment:string; price:number; notes:string; photo:string; created:string};
 type Event = {id:string; stoneId:string; date:string; stage:string; detail:string; responsible:string; cost:number};
-const KEY='jairrestaura_esmeralda_v3';
+const KEY='jairrestaura_esmeralda_v4';
+const LEGACY_KEY='jairrestaura_esmeralda_v3';
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const money=(n:number)=>new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',maximumFractionDigits:0}).format(n||0);
 const stages=['Bruto','En clasificación','En talla','Tallado','Engastado'];
 const empty={stones:[] as Stone[],events:[] as Event[]};
-function read(){try{const x=JSON.parse(localStorage.getItem(KEY)||'{}');return {stones:Array.isArray(x.stones)?x.stones:Array.isArray(x.emeralds)?x.emeralds.map((e:any)=>({id:e.id||uid(),code:e.codigo||'',name:e.nombre||'Esmeralda',stage:e.estado||'Bruto',status:e.estadoComercial||'Disponible',carats:Number(e.peso)||0,color:e.color||'',clarity:e.transparencia||'',origin:e.origen||'',treatment:e.tratamiento||'',price:Number(e.precioSolicitado)||0,notes:e.notas||'',photo:e.foto||'',created:new Date(e.createdAt||Date.now()).toISOString()})):[],events:Array.isArray(x.events)?x.events:[]};}catch{return empty;}}
+function read(){try{const x=JSON.parse(localStorage.getItem(KEY)||localStorage.getItem(LEGACY_KEY)||'{}');return {stones:Array.isArray(x.stones)?x.stones:Array.isArray(x.emeralds)?x.emeralds.map((e:any)=>({id:e.id||uid(),code:e.codigo||'',name:e.nombre||'Esmeralda',stage:e.estado||'Bruto',status:e.estadoComercial||'Disponible',carats:Number(e.peso)||0,color:e.color||'',clarity:e.transparencia||'',origin:e.origen||'',treatment:e.tratamiento||'',price:Number(e.precioSolicitado)||0,notes:e.notas||'',photo:e.foto||'',created:new Date(e.createdAt||Date.now()).toISOString()})):[],events:Array.isArray(x.events)?x.events.map((ev:any)=>({id:ev.id||uid(),stoneId:ev.emeraldId||ev.stoneId||'',date:ev.fecha||ev.date||new Date().toISOString(),stage:ev.etapa||ev.stage||'Proceso registrado',detail:ev.detalle||ev.detail||'',responsible:ev.responsable||ev.responsible||'',cost:Number(ev.costo??ev.cost)||0})):[]};}catch{return empty;}}
 function saveFile(name:string,data:string,type='application/json'){const a=document.createElement('a');const u=URL.createObjectURL(new Blob([data],{type}));a.href=u;a.download=name;a.click();URL.revokeObjectURL(u);}
 const btn='rounded-xl px-4 py-2.5 font-semibold text-sm transition disabled:opacity-40';
 export default function App(){
