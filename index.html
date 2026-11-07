@@ -1,14 +1,605 @@
-<!doctype html>
-<html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#064e3b" />
-    <meta name="description" content="Esmeralda Inteligente JairRestaura: inventario, trazabilidad, valoración orientativa y comercio responsable de esmeraldas." />
-    <title>Esmeralda Inteligente | JairRestaura</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import {
+  Gem, LayoutDashboard, Package, ShoppingBag, ClipboardList, Scale, BookOpen,
+  FileBarChart2, ShieldCheck, Search, Plus, Camera, Download, Upload, Printer,
+  ChevronRight, ChevronLeft, Menu, X, Save, History, Image as ImageIcon,
+  BadgeCheck, AlertTriangle, Info, ExternalLink, Eye, Pencil, Filter, Trash2,
+  ArrowRightLeft, CircleDollarSign, QrCode, GraduationCap, BookMarked, Wrench,
+  Handshake, FileText, CalendarDays, MapPin, Tag, Sparkles, CheckCircle2,
+  CircleHelp, Settings, Database, RotateCcw, Bot, User, Send, Paperclip, LogIn
+} from 'lucide-react';
+
+/**
+ * ESMERALDA INTELIGENTE JAIRRESTAURA — V4 (Máximo Nivel)
+ * Firebase integrado con Autenticación Anónima por defecto (Sin registro obligatorio).
+ * QR reales, Asistentes IA (Gemini), adjuntos y almacenamiento seguro y persistente.
+ */
+
+// ==========================================
+// 1. CONFIGURACIÓN DE FIREBASE (Reglas Estrictas)
+// ==========================================
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'jairrestaura-v4';
+
+// ==========================================
+// UTILIDADES COMPARTIDAS
+// ==========================================
+const money = (n, currency = 'COP') => new Intl.NumberFormat('es-CO', { style: 'currency', currency, maximumFractionDigits: 0 }).format(Number(n || 0));
+const dateLabel = (value) => new Date(value).toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: 'numeric' });
+const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const stages = ['Bruto', 'En clasificación', 'En talla', 'Tallado', 'Engastado'];
+const commercialStates = ['Disponible', 'Reservado', 'Vendido', 'No comercial'];
+
+function downloadFile(name, content, type = 'application/json') {
+  const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+}
+
+function SectionTitle({ icon: Icon, title, subtitle, action }) {
+  return <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-7"><div><div className="flex items-center gap-2 text-emerald-800 mb-2"><Icon size={19}/><span className="text-xs uppercase tracking-[.18em] font-bold">JairRestaura · V4 Cloud</span></div><h1 className="text-2xl md:text-3xl font-black text-slate-900">{title}</h1><p className="text-slate-500 mt-1">{subtitle}</p></div>{action}</div>;
+}
+function Stat({ label, value, detail, icon: Icon }) {
+  return <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm"><div className="flex justify-between items-start"><span className="text-sm text-slate-500">{label}</span><span className="p-2 rounded-xl bg-emerald-50 text-emerald-800"><Icon size={19}/></span></div><div className="text-2xl font-black text-slate-900 mt-3">{value}</div><div className="text-xs text-slate-400 mt-1">{detail}</div></div>;
+}
+function Empty({ title, text, action }) { return <div className="text-center p-10 bg-white border border-dashed border-slate-300 rounded-2xl"><Gem className="mx-auto text-emerald-700 mb-3" size={34}/><h3 className="font-bold text-slate-800">{title}</h3><p className="text-sm text-slate-500 mt-1">{text}</p>{action && <div className="mt-4">{action}</div>}</div>; }
+function Button({ children, onClick, variant = 'primary', type = 'button', disabled = false, className = '' }) {
+  const styles = { primary: 'bg-emerald-900 text-white hover:bg-emerald-800', light: 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50', gold: 'bg-amber-500 text-emerald-950 hover:bg-amber-400', danger: 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100' };
+  return <button type={type} disabled={disabled} onClick={onClick} className={`inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition disabled:opacity-40 ${styles[variant]} ${className}`}>{children}</button>;
+}
+
+// ==========================================
+// COMPONENTE PRINCIPAL
+// ==========================================
+export default function App() {
+  const [user, setUser] = useState(null);
+  
+  // Estado particionado para Firebase
+  const [emeralds, setEmeralds] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [valuations, setValuations] = useState([]);
+  const [deals, setDeals] = useState([]);
+  
+  // Estado combinado memoizado para compatibilidad con módulos V3
+  const data = useMemo(() => ({ emeralds, events, valuations, deals, updatedAt: Date.now() }), [emeralds, events, valuations, deals]);
+
+  const [tab, setTab] = useState('inicio');
+  const [sidebar, setSidebar] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [selected, setSelected] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [query, setQuery] = useState('');
+  const [stageFilter, setStageFilter] = useState('');
+  const [commFilter, setCommFilter] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const importRef = useRef(null);
+
+  // 2. INICIALIZACIÓN Y AUTENTICACIÓN
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Error de autenticación:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 3. RECUPERACIÓN DE DATOS (Persistencia Firestore)
+  useEffect(() => {
+    if (!user) return;
+    const basePath = `artifacts/${appId}/users/${user.uid}`;
+    
+    const unsubs = [];
+    unsubs.push(onSnapshot(collection(db, `${basePath}/emeralds`), snap => {
+      setEmeralds(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, err => console.error(err)));
+    
+    unsubs.push(onSnapshot(collection(db, `${basePath}/events`), snap => {
+      setEvents(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, err => console.error(err)));
+    
+    unsubs.push(onSnapshot(collection(db, `${basePath}/valuations`), snap => {
+      setValuations(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, err => console.error(err)));
+    
+    unsubs.push(onSnapshot(collection(db, `${basePath}/deals`), snap => {
+      setDeals(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, err => console.error(err)));
+
+    return () => unsubs.forEach(u => u());
+  }, [user]);
+
+  useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(''), 4000); return () => clearTimeout(t); }, [notice]);
+
+  const saveToDb = async (colName, item, successMsg) => {
+    if (!user) return;
+    try {
+      await setDoc(doc(db, `artifacts/${appId}/users/${user.uid}/${colName}`, item.id), item);
+      if (successMsg) setNotice(successMsg);
+    } catch (e) {
+      console.error(e);
+      setNotice('Error al guardar en la nube.');
+    }
+  };
+
+  const saveEmerald = (e) => { saveToDb('emeralds', e, 'Ficha guardada en la nube.'); setShowForm(false); setEditing(null); };
+  const addEvent = (event) => saveToDb('events', event, 'Evento de trazabilidad registrado.');
+  const addValuation = (v) => saveToDb('valuations', v, 'Valoración orientativa guardada.');
+  const addDeal = (d) => saveToDb('deals', d, 'Movimiento comercial guardado.');
+
+  const filtered = useMemo(() => data.emeralds.filter(e => {
+    const q = query.toLowerCase();
+    return (!q || [e.codigo, e.nombre, e.color, e.origen].join(' ').toLowerCase().includes(q)) && (!stageFilter || e.estado === stageFilter) && (!commFilter || e.estadoComercial === commFilter);
+  }).sort((a, b) => b.createdAt - a.createdAt), [data.emeralds, query, stageFilter, commFilter]);
+
+  const nav = [
+    { id: 'inicio', label: 'Panel general', icon: LayoutDashboard, group: 'GESTIÓN' },
+    { id: 'inventario', label: 'Inventario y fichas', icon: Package, group: 'GESTIÓN' },
+    { id: 'procesos', label: 'Procesos y trazabilidad', icon: ClipboardList, group: 'GESTIÓN' },
+    { id: 'comercio', label: 'Comercio y clientes', icon: ShoppingBag, group: 'NEGOCIO' },
+    { id: 'valoracion', label: 'Valoración orientativa', icon: Scale, group: 'NEGOCIO' },
+    { id: 'pasaporte', label: 'Pasaporte de pieza', icon: QrCode, group: 'NEGOCIO' },
+    { id: 'ia', label: 'Asistentes IA', icon: Bot, group: 'INTELIGENCIA' },
+    { id: 'academia', label: 'Academia esmeraldera', icon: GraduationCap, group: 'CONOCIMIENTO' },
+    { id: 'informes', label: 'Informes y respaldos', icon: FileBarChart2, group: 'SISTEMA' },
+    { id: 'seguridad', label: 'Privacidad y seguridad', icon: ShieldCheck, group: 'SISTEMA' },
+  ];
+
+  const exportBackup = () => downloadFile(`respaldo-esmeralda-v4-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(data, null, 2));
+  const importBackup = async (file) => {
+    if (!file || !user) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const p = `artifacts/${appId}/users/${user.uid}`;
+      if (parsed.emeralds) parsed.emeralds.forEach(e => setDoc(doc(db, `${p}/emeralds`, e.id), e));
+      if (parsed.events) parsed.events.forEach(e => setDoc(doc(db, `${p}/events`, e.id), e));
+      if (parsed.valuations) parsed.valuations.forEach(e => setDoc(doc(db, `${p}/valuations`, e.id), e));
+      if (parsed.deals) parsed.deals.forEach(e => setDoc(doc(db, `${p}/deals`, e.id), e));
+      setNotice('Respaldo importado y sincronizado a la nube sin borrar registros existentes.');
+    } catch { setNotice('No se pudo leer el archivo. Seleccione un respaldo JSON válido.'); }
+    if (importRef.current) importRef.current.value = '';
+  };
+
+  const handleGoogleSignIn = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+      setNotice('Sesión vinculada con Google. Tus datos están a salvo.');
+    } catch (error) {
+      console.error(error);
+      setNotice('Error al iniciar sesión con Google.');
+    }
+  };
+
+  const go = (id) => { setTab(id); setSidebar(false); setSelected(null); };
+  const openPassport = (e) => { setSelected(e); setTab('pasaporte'); };
+
+  return <div className="min-h-screen bg-[#f4f7f5] text-slate-800 flex">
+    {sidebar && <button aria-label="Cerrar menú" onClick={() => setSidebar(false)} className="fixed inset-0 bg-black/40 z-30 md:hidden"/>}
+    <aside className={`fixed md:sticky top-0 left-0 z-40 h-screen w-[285px] bg-[#063f35] text-white flex flex-col transition-transform ${sidebar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+      <div className="px-6 py-7 border-b border-white/10"><div className="w-12 h-12 rounded-2xl bg-amber-400 text-emerald-950 grid place-items-center mb-4"><Gem size={27}/></div><div className="font-black tracking-wide leading-tight">ESMERALDA<br/>INTELIGENTE</div><div className="text-amber-300 text-xs tracking-[.2em] mt-1">JAIRRESTAURA · V4</div><p className="text-emerald-100/60 text-xs mt-4">Gestión Cloud y Trazabilidad</p></div>
+      <nav className="flex-1 overflow-y-auto px-3 py-5">{['GESTIÓN','NEGOCIO','INTELIGENCIA','CONOCIMIENTO','SISTEMA'].map(group => {
+        const items = nav.filter(n => n.group === group);
+        if(!items.length) return null;
+        return <div key={group} className="mb-5"><div className="px-3 mb-2 text-[10px] tracking-[.2em] text-emerald-200/50 font-bold">{group}</div>{items.map(n => <button key={n.id} onClick={() => go(n.id)} className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm mb-1 text-left transition ${tab === n.id ? 'bg-amber-400 text-emerald-950 font-bold shadow' : 'text-emerald-50/80 hover:bg-white/10'}`}><n.icon size={18}/>{n.label}</button>)}</div>
+      })}</nav>
+      <div className="p-4 border-t border-white/10">
+        <div className="text-xs text-emerald-100/70 flex items-center gap-2"><CheckCircle2 size={14} className="text-amber-300"/> Conectado a la Nube</div>
+        <div className="text-[10px] text-emerald-100/40 mt-1">{user?.isAnonymous ? 'Sesión anónima persistente' : 'Sesión verificada'}</div>
+      </div>
+    </aside>
+    <main className="min-w-0 flex-1 relative">
+      <header className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-slate-200 px-4 md:px-8 py-3 flex items-center justify-between"><div className="flex items-center gap-3"><button className="md:hidden p-2 rounded-lg hover:bg-slate-100" onClick={() => setSidebar(true)}><Menu/></button><div><div className="text-xs text-slate-400">ESMERALDA INTELIGENTE / JAIRRESTAURA</div><div className="font-bold text-slate-800">{nav.find(n => n.id === tab)?.label || 'Panel'}</div></div></div><div className="flex items-center gap-2"><span className="hidden sm:inline text-xs text-slate-400">{dateLabel(Date.now())}</span><Button variant="light" onClick={exportBackup}><Download size={16}/> Respaldo</Button></div></header>
+      {notice && <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-6 py-3 bg-emerald-900 border border-amber-400 text-white rounded-full text-sm font-bold flex items-center gap-2 shadow-lg animate-in fade-in slide-in-from-top-4"><CheckCircle2 size={17} className="text-amber-400"/>{notice}</div>}
+      
+      <div className="p-4 md:p-8 max-w-[1500px] mx-auto h-[calc(100vh-65px)] overflow-y-auto">
+        {tab === 'inicio' && <Dashboard data={data} go={go}/>}
+        {tab === 'inventario' && <Inventory emeralds={filtered} query={query} setQuery={setQuery} stageFilter={stageFilter} setStageFilter={setStageFilter} commFilter={commFilter} setCommFilter={setCommFilter} onNew={() => {setEditing(null);setShowForm(true);}} onEdit={e => {setEditing(e);setShowForm(true);}} onPassport={openPassport}/>}
+        {tab === 'procesos' && <Processes data={data} onAdd={addEvent}/>}
+        {tab === 'comercio' && <Commerce data={data} onAdd={addDeal} onPassport={openPassport}/>}
+        {tab === 'valoracion' && <ValuationModule data={data} onAdd={addValuation}/>}
+        {tab === 'pasaporte' && <Passport emerald={selected || data.emeralds[0] || null} events={data.events} valuations={data.valuations} onBack={() => go('inventario')}/>}
+        {tab === 'ia' && <AsistentesIAModule />}
+        {tab === 'academia' && <Academy/>}
+        {tab === 'informes' && <Reports data={data} exportBackup={exportBackup} importRef={importRef} onImport={importBackup}/>}
+        {tab === 'seguridad' && <Security data={data} exportBackup={exportBackup} importRef={importRef} onImport={importBackup} onGoogleSignIn={handleGoogleSignIn} user={user}/>}
+      </div>
+    </main>
+    {showForm && <EmeraldForm initial={editing} onClose={() => {setShowForm(false);setEditing(null);}} onSave={saveEmerald}/>}
+    <input ref={importRef} type="file" accept="application/json,.json" className="hidden" onChange={e => importBackup(e.target.files?.[0])}/>
+  </div>;
+}
+
+// ==========================================
+// MÓDULOS DE INTERFAZ
+// ==========================================
+
+function Dashboard({ data, go }) {
+  const weight = data.emeralds.reduce((s, e) => s + e.peso, 0);
+  const available = data.emeralds.filter((e) => e.estadoComercial === 'Disponible').length;
+  const latest = [...data.events].sort((a,b) => b.fecha.localeCompare(a.fecha)).slice(0,5);
+  return <><div className="rounded-[28px] overflow-hidden bg-gradient-to-r from-[#063f35] to-[#0b6957] text-white p-7 md:p-10 relative"><div className="absolute -right-10 -top-16 w-72 h-72 rounded-full border-[35px] border-white/5"/><div className="relative max-w-3xl"><div className="inline-flex gap-2 items-center text-amber-300 text-xs font-bold tracking-[.18em] mb-4"><Sparkles size={15}/> PLATAFORMA CLOUD ABIERTA V4</div><h1 className="text-3xl md:text-5xl font-black leading-tight">Del origen a la<br/><span className="text-amber-300">comercialización.</span></h1><p className="text-emerald-50/80 mt-4 max-w-xl">Ahora con almacenamiento persistente en la nube, Asistentes IA y Códigos QR, manteniendo el principio de 100% gratuidad y privacidad.</p><div className="flex flex-wrap gap-3 mt-7"><Button variant="gold" onClick={() => go('inventario')}><Package size={17}/> Abrir inventario</Button><Button variant="light" onClick={() => go('ia')}><Bot size={17}/> Hablar con IA</Button></div></div></div>
+    <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mt-6"><Stat label="Piezas registradas" value={data.emeralds.length} detail="Fichas sincronizadas" icon={Gem}/><Stat label="Peso inventariado" value={`${weight.toFixed(2)} ct`} detail="Suma de pesos registrados" icon={Scale}/><Stat label="Disponibles" value={available} detail="Estado comercial disponible" icon={ShoppingBag}/><Stat label="Eventos documentados" value={data.events.length} detail="Historial de procesos en la nube" icon={History}/></div>
+    <div className="grid xl:grid-cols-3 gap-5 mt-6"><div className="xl:col-span-2 bg-white border border-slate-200 rounded-2xl p-6"><div className="flex justify-between items-center mb-5"><h2 className="font-black text-lg">Actividad de trazabilidad</h2><button onClick={() => go('procesos')} className="text-emerald-800 text-sm font-bold">Ver procesos <ChevronRight size={15} className="inline"/></button></div>{latest.length ? <div className="space-y-4">{latest.map((ev) => <div key={ev.id} className="flex gap-3"><div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-800 grid place-items-center shrink-0"><ClipboardList size={17}/></div><div className="min-w-0 flex-1"><div className="font-bold text-sm">{ev.etapa}</div><div className="text-xs text-slate-500">{ev.detalle}</div><div className="text-[11px] text-slate-400 mt-1">{dateLabel(ev.fecha)} · {ev.responsable || 'Responsable no indicado'}</div></div></div>)}</div> : <Empty title="Aún no hay procesos registrados" text="Cuando documente recepción, clasificación, talla o entrega, verá aquí la actividad." action={<Button onClick={() => go('procesos')}>Registrar proceso</Button>}/>}</div><div className="bg-white border border-slate-200 rounded-2xl p-6"><h2 className="font-black text-lg mb-4">Accesos rápidos</h2><div className="space-y-2">{[{id:'inventario',label:'Registrar una esmeralda',icon:Plus},{id:'valoracion',label:'Valoración orientativa',icon:Scale},{id:'pasaporte',label:'Generar Pasaporte QR',icon:QrCode},{id:'ia',label:'Consultar Asistente IA',icon:Bot}].map(x=><button key={x.id} onClick={() => go(x.id)} className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-50 hover:bg-emerald-50 text-left text-sm font-semibold"><x.icon size={17} className="text-emerald-800"/>{x.label}<ChevronRight size={15} className="ml-auto text-slate-400"/></button>)}</div><p className="text-xs text-slate-400 mt-5">Todos tus datos están protegidos en la base de datos de Firebase.</p></div></div></>;
+}
+
+function Inventory({ emeralds, query, setQuery, stageFilter, setStageFilter, commFilter, setCommFilter, onNew, onEdit, onPassport }) {
+  return <><SectionTitle icon={Package} title="Inventario inteligente" subtitle="Fichas técnicas, certificados, fotografías, estado físico y disponibilidad." action={<Button onClick={onNew}><Plus size={17}/> Registrar pieza</Button>}/><div className="bg-white border border-slate-200 rounded-2xl p-4 mb-5 grid md:grid-cols-[1fr_190px_190px] gap-3"><div className="relative"><Search className="absolute left-3 top-3 text-slate-400" size={17}/><input className="w-full border border-slate-200 rounded-xl py-2.5 pl-10 pr-3" placeholder="Buscar código, nombre, color u origen..." value={query} onChange={e => setQuery(e.target.value)}/></div><select className="border border-slate-200 rounded-xl px-3 py-2" value={stageFilter} onChange={e => setStageFilter(e.target.value)}><option value="">Todos los estados físicos</option>{stages.map(s=><option key={s}>{s}</option>)}</select><select className="border border-slate-200 rounded-xl px-3 py-2" value={commFilter} onChange={e => setCommFilter(e.target.value)}><option value="">Todos los estados comerciales</option>{commercialStates.map(s=><option key={s}>{s}</option>)}</select></div>{emeralds.length ? <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">{emeralds.map((e)=><div key={e.id} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm flex flex-col"><div className="h-48 bg-gradient-to-br from-emerald-950 to-emerald-700 relative">{e.foto ? <img src={e.foto} alt={`Fotografía de ${e.nombre}`} className="w-full h-full object-cover"/> : <div className="w-full h-full grid place-items-center text-emerald-100/50"><Gem size={64}/></div>}<div className="absolute top-3 left-3 bg-white/90 text-emerald-950 rounded-full px-3 py-1 text-xs font-bold shadow">{e.estado}</div><div className="absolute top-3 right-3 bg-black/50 backdrop-blur-sm text-white rounded-full px-2 py-1 text-xs">{e.codigo}</div>{e.certificados?.length > 0 && <div className="absolute bottom-3 right-3 bg-white/90 text-emerald-900 rounded-full px-2 py-1 text-xs font-bold flex items-center gap-1"><Paperclip size={12}/> {e.certificados.length} Adj.</div>}</div><div className="p-5 flex-1 flex flex-col"><div className="flex justify-between gap-2"><h3 className="font-black text-lg truncate">{e.nombre}</h3><span className="text-amber-600 font-black whitespace-nowrap">{e.peso} ct</span></div><p className="text-sm text-slate-500 mt-1 flex-1">{e.color} · {e.transparencia}</p><div className="flex items-center justify-between mt-4"><span className={`text-xs font-bold px-2.5 py-1 rounded-full ${e.estadoComercial === 'Disponible' ? 'bg-emerald-50 text-emerald-800' : e.estadoComercial === 'Vendido' ? 'bg-blue-50 text-blue-800' : 'bg-amber-50 text-amber-800'}`}>{e.estadoComercial}</span><div className="flex gap-1"><button title="Editar ficha" onClick={() => onEdit(e)} className="p-2 rounded-lg hover:bg-slate-100"><Pencil size={16}/></button><button title="Ver pasaporte" onClick={() => onPassport(e)} className="p-2 rounded-lg hover:bg-emerald-50 text-emerald-800"><QrCode size={16}/></button></div></div></div></div>)}</div> : <Empty title="No hay piezas en este filtro" text="Registre una esmeralda o cambie los filtros para consultar el inventario." action={<Button onClick={onNew}><Plus size={16}/> Registrar primera pieza</Button>}/>}</>;
+}
+
+function EmeraldForm({ initial, onClose, onSave }) {
+  const [form, setForm] = useState(initial || { id: uid(), codigo: '', nombre: '', estado: 'Bruto', estadoComercial: 'Disponible', peso: '', color: '', transparencia: '', origen: '', forma: '', dimensiones: '', tratamiento: 'No determinado', descripcion: '', precioSolicitado: '', moneda: 'COP', foto: '', certificados: [], createdAt: Date.now(), updatedAt: Date.now(), propietario: '', ubicacion: '', notas: '' });
+  const [error, setError] = useState('');
+  
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v, updatedAt: Date.now() }));
+  
+  const handlePhoto = (file) => { 
+    if (!file) return; 
+    if (file.size > 2500000) { setError('La imagen supera 2.5 MB. Comprímala.'); return; } 
+    const reader = new FileReader(); 
+    reader.onload = () => set('foto', String(reader.result)); 
+    reader.readAsDataURL(file); 
+  };
+
+  const handleCert = (file) => {
+    if (!file) return; 
+    if (file.size > 2500000) { setError('El certificado supera 2.5 MB. Comprímalo.'); return; } 
+    const reader = new FileReader(); 
+    reader.onload = () => set('certificados', [...(form.certificados || []), { id: uid(), name: file.name, data: String(reader.result) }]); 
+    reader.readAsDataURL(file); 
+  };
+
+  const removeCert = (id) => {
+    set('certificados', form.certificados.filter(c => c.id !== id));
+  };
+
+  const submit = (e) => { 
+    e.preventDefault(); 
+    if (!form.codigo.trim() || !form.nombre.trim() || Number(form.peso) <= 0) { setError('Complete código, nombre y peso mayor que cero.'); return; } 
+    onSave({ ...form, codigo: form.codigo.trim().toUpperCase(), peso: Number(form.peso), precioSolicitado: Number(form.precioSolicitado || 0), updatedAt: Date.now() }); 
+  };
+
+  return <div className="fixed inset-0 z-50 bg-slate-950/60 p-3 md:p-6 grid place-items-center"><form onSubmit={submit} className="bg-white rounded-3xl w-full max-w-4xl max-h-[94vh] overflow-y-auto shadow-2xl animate-in zoom-in-95 duration-200"><div className="sticky top-0 z-10 bg-[#063f35] text-white p-5 flex justify-between items-center"><div><div className="text-amber-300 text-xs font-bold tracking-widest">FICHA TÉCNICA CLOUD</div><h2 className="text-xl font-black">{initial ? 'Editar pieza' : 'Registrar esmeralda'}</h2></div><button type="button" onClick={onClose} className="hover:bg-white/10 p-2 rounded-full"><X/></button></div><div className="p-6 grid md:grid-cols-2 gap-4">{error && <div className="md:col-span-2 bg-rose-50 text-rose-800 rounded-xl p-3 text-sm flex items-center gap-2"><AlertTriangle size={16}/>{error}</div>}{[['Código único','codigo','ESM-0001'],['Nombre o referencia','nombre','Esmeralda Muzo'],['Color observado','color','Verde intenso'],['Transparencia','transparencia','Transparente / translúcida'],['Origen declarado','origen','Municipio / mina / proveedor'],['Forma','forma','Cristal / irregular / oval'],['Dimensiones','dimensiones','Largo × ancho × alto mm'],['Propietario o custodio','propietario','Nombre o razón social'],['Ubicación actual','ubicacion','Bodega / taller / ciudad']].map(([label,key,placeholder])=><label key={key} className="text-sm font-semibold text-slate-700">{label}<input className="mt-1 w-full border border-slate-200 rounded-xl p-3 font-normal" value={form[key] || ''} placeholder={placeholder} onChange={e => set(key,e.target.value)}/></label>)}<label className="text-sm font-semibold">Peso (quilates)<input type="number" step="0.01" min="0.01" required className="mt-1 w-full border border-slate-200 rounded-xl p-3" value={form.peso} onChange={e => set('peso',e.target.value)}/></label><label className="text-sm font-semibold">Estado físico<select className="mt-1 w-full border border-slate-200 rounded-xl p-3" value={form.estado} onChange={e => set('estado',e.target.value)}>{stages.map(s=><option key={s}>{s}</option>)}</select></label><label className="text-sm font-semibold">Estado comercial<select className="mt-1 w-full border border-slate-200 rounded-xl p-3" value={form.estadoComercial} onChange={e => set('estadoComercial',e.target.value)}>{commercialStates.map(s=><option key={s}>{s}</option>)}</select></label><label className="text-sm font-semibold">Tratamiento declarado<select className="mt-1 w-full border border-slate-200 rounded-xl p-3" value={form.tratamiento} onChange={e => set('tratamiento',e.target.value)}>{['No determinado','Sin evidencia observada','Aceitado declarado','Resina declarada','Otro / por verificar'].map(s=><option key={s}>{s}</option>)}</select></label><label className="text-sm font-semibold">Precio solicitado (COP)<input type="number" min="0" className="mt-1 w-full border border-slate-200 rounded-xl p-3" value={form.precioSolicitado} onChange={e => set('precioSolicitado',e.target.value)}/></label><label className="md:col-span-2 text-sm font-semibold">Descripción y observaciones<textarea rows={3} className="mt-1 w-full border border-slate-200 rounded-xl p-3 font-normal" value={form.descripcion} onChange={e => set('descripcion',e.target.value)}/></label>
+      
+      {/* Sección Fotografías y Adjuntos */}
+      <div className="md:col-span-2 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+        <h3 className="font-bold mb-3 flex items-center gap-2"><ImageIcon size={18}/> Multimedia y Certificados</h3>
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="flex flex-col gap-3">
+            <div className="w-full h-40 rounded-xl bg-emerald-950 overflow-hidden grid place-items-center relative">
+              {form.foto ? <img src={form.foto} className="w-full h-full object-cover"/> : <Camera size={38} className="text-emerald-200/50"/>}
+              <label className="absolute inset-0 cursor-pointer flex items-center justify-center opacity-0 hover:opacity-100 bg-black/50 transition-opacity">
+                <span className="text-white bg-[#063f35] px-3 py-1.5 rounded-lg text-xs font-bold shadow">Subir Foto</span>
+                <input type="file" accept="image/*" className="hidden" onChange={e => handlePhoto(e.target.files?.[0])}/>
+              </label>
+            </div>
+            <div className="text-xs text-slate-500 text-center">Fotografía principal (Recomendado: 1:1, max 2.5MB)</div>
+          </div>
+          <div>
+            <label className="border-2 border-dashed border-slate-300 rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-emerald-50 hover:border-emerald-300 transition-colors h-24 mb-3">
+              <Upload size={20} className="text-slate-400 mb-2"/>
+              <span className="text-xs font-bold text-slate-600">Adjuntar Certificado / Documento</span>
+              <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e => handleCert(e.target.files?.[0])}/>
+            </label>
+            {form.certificados?.length > 0 && <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+              {form.certificados.map(c => (
+                <div key={c.id} className="flex justify-between items-center bg-white p-2 rounded-lg border border-slate-200 text-xs shadow-sm">
+                  <div className="flex items-center gap-2 truncate">
+                    <FileText size={14} className="text-emerald-700"/>
+                    <span className="truncate max-w-[150px] font-medium">{c.name || 'Documento adjunto'}</span>
+                  </div>
+                  <button type="button" onClick={() => removeCert(c.id)} className="text-rose-500 hover:bg-rose-50 p-1 rounded"><Trash2 size={14}/></button>
+                </div>
+              ))}
+            </div>}
+          </div>
+        </div>
+      </div>
+      
+      </div><div className="sticky bottom-0 bg-slate-50 border-t p-4 flex justify-end gap-2"><Button variant="light" onClick={onClose}>Cancelar</Button><Button type="submit"><Save size={16}/> Guardar ficha</Button></div></form></div>;
+}
+
+function Processes({ data, onAdd }) {
+  const [form, setForm] = useState({ emeraldId: '', fecha: new Date().toISOString().slice(0,10), etapa: 'Recepción', responsable: '', detalle: '', pesoAntes: '', pesoDespues: '', costo: '' });
+  const submit = (e) => { e.preventDefault(); if (!form.emeraldId || !form.detalle.trim()) return; onAdd({ ...form, id: uid(), pesoAntes: form.pesoAntes === '' ? null : Number(form.pesoAntes), pesoDespues: form.pesoDespues === '' ? null : Number(form.pesoDespues), costo: Number(form.costo || 0), foto: '' }); setForm((p) => ({ ...p, detalle: '', pesoAntes: '', pesoDespues: '', costo: '' })); };
+  const sorted = [...data.events].sort((a,b) => b.fecha.localeCompare(a.fecha));
+  return <><SectionTitle icon={ClipboardList} title="Procesos y trazabilidad" subtitle="Documente cada recepción, clasificación, transformación, traslado y entrega."/><div className="grid xl:grid-cols-[390px_1fr] gap-5"><form onSubmit={submit} className="bg-white border border-slate-200 rounded-2xl p-5 h-fit shadow-sm"><h2 className="font-black text-lg mb-4 text-[#063f35]">Registrar evento</h2><label className="block text-sm font-semibold mb-3">Pieza<select required className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.emeraldId} onChange={e => setForm({...form,emeraldId:e.target.value})}><option value="">Seleccione pieza</option>{data.emeralds.map((e)=><option key={e.id} value={e.id}>{e.codigo} · {e.nombre}</option>)}</select></label><label className="block text-sm font-semibold mb-3">Etapa<select className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.etapa} onChange={e => setForm({...form,etapa:e.target.value})}>{['Recepción','Inspección','Clasificación','Traslado','Corte','Talla','Engaste','Valoración','Cotización','Reserva','Venta','Entrega','Corrección documental'].map(s=><option key={s}>{s}</option>)}</select></label><label className="block text-sm font-semibold mb-3">Fecha<input type="date" className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.fecha} onChange={e => setForm({...form,fecha:e.target.value})}/></label><label className="block text-sm font-semibold mb-3">Responsable<input className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.responsable} onChange={e => setForm({...form,responsable:e.target.value})}/></label><label className="block text-sm font-semibold mb-3">Detalle del trabajo<textarea required rows={3} className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.detalle} onChange={e => setForm({...form,detalle:e.target.value})}/></label><div className="grid grid-cols-2 gap-3"><label className="text-sm font-semibold">Peso antes (ct)<input type="number" step="0.01" className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.pesoAntes} onChange={e => setForm({...form,pesoAntes:e.target.value})}/></label><label className="text-sm font-semibold">Peso después (ct)<input type="number" step="0.01" className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.pesoDespues} onChange={e => setForm({...form,pesoDespues:e.target.value})}/></label></div><label className="block text-sm font-semibold my-3">Costo del proceso (COP)<input type="number" min="0" className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.costo} onChange={e => setForm({...form,costo:e.target.value})}/></label><Button type="submit" disabled={!data.emeralds.length} className="w-full"><Plus size={16}/> Guardar evento</Button></form><div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm"><h2 className="font-black text-lg mb-5 text-[#063f35]">Historial cronológico</h2>{sorted.length ? <div className="space-y-4">{sorted.map((ev)=><div key={ev.id} className="flex gap-4 border-l-2 border-emerald-200 pl-4 pb-4"><div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-800 grid place-items-center shrink-0"><History size={17}/></div><div className="flex-1"><div className="flex flex-wrap justify-between gap-2"><b className="text-slate-800">{ev.etapa}</b><span className="text-xs text-slate-400">{dateLabel(ev.fecha)}</span></div><p className="text-sm text-slate-600 mt-1">{ev.detalle}</p><p className="text-xs text-slate-400 mt-2 font-bold">{data.emeralds.find((e)=>e.id===ev.emeraldId)?.codigo || 'Pieza importada'} · <span className="font-normal">{ev.responsable || 'Sin responsable'}</span></p>{(ev.pesoAntes !== null || ev.pesoDespues !== null) && <div className="text-xs text-emerald-800 mt-2 font-bold">Peso: {ev.pesoAntes ?? '—'} → {ev.pesoDespues ?? '—'} ct</div>}</div></div>)}</div> : <Empty title="Sin historial todavía" text="Cada evento quedará asociado a la ficha de la esmeralda y no reemplazará los anteriores."/>}</div></div></>;
+}
+
+function Commerce({ data, onAdd, onPassport }) {
+  const [form, setForm] = useState({ emeraldId: '', tipo: 'Cotización', persona: '', contacto: '', fecha: new Date().toISOString().slice(0,10), valor: '', estado: 'Pendiente', notas: '' });
+  const submit = (e) => { e.preventDefault(); if (!form.emeraldId || !form.persona.trim()) return; onAdd({ ...form, id: uid(), valor: Number(form.valor || 0) }); setForm((p) => ({ ...p, persona: '', contacto: '', valor: '', notas: '' })); };
+  return <><SectionTitle icon={ShoppingBag} title="Comercio y clientes" subtitle="Catálogo disponible, cotizaciones, reservas y registro de ventas."/><div className="grid xl:grid-cols-[1fr_390px] gap-5"><div><h2 className="font-black text-lg mb-3">Catálogo disponible</h2>{data.emeralds.filter((e)=>e.estadoComercial==='Disponible').length ? <div className="grid md:grid-cols-2 gap-4">{data.emeralds.filter((e)=>e.estadoComercial==='Disponible').map((e)=><div key={e.id} className="bg-white rounded-2xl border shadow-sm p-4 flex gap-4">{e.foto ? <img src={e.foto} className="w-24 h-24 object-cover rounded-xl"/> : <div className="w-24 h-24 bg-emerald-950 rounded-xl grid place-items-center text-emerald-200"><Gem size={32}/></div>}<div className="min-w-0 flex-1"><b className="truncate block">{e.nombre}</b><p className="text-xs text-slate-500">{e.codigo} · {e.peso} ct</p><p className="text-sm text-emerald-800 font-bold mt-2">{e.precioSolicitado ? money(e.precioSolicitado,e.moneda) : 'Consultar precio'}</p><button onClick={()=>onPassport(e)} className="text-xs font-bold text-[#063f35] bg-[#063f35]/5 px-3 py-1 rounded-full mt-2 hover:bg-[#063f35]/10">Ver pasaporte</button></div></div>)}</div> : <Empty title="No hay piezas disponibles" text="Cambie el estado comercial desde la ficha de inventario."/>}<h2 className="font-black text-lg mt-7 mb-3">Registro comercial</h2><div className="bg-white rounded-2xl border shadow-sm overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="text-left p-3">Tipo</th><th className="text-left p-3">Pieza</th><th className="text-left p-3">Contacto</th><th className="text-right p-3">Valor</th><th className="text-left p-3">Estado</th></tr></thead><tbody>{data.deals.map((d)=><tr key={d.id} className="border-t hover:bg-slate-50"><td className="p-3 font-medium">{d.tipo}</td><td className="p-3">{data.emeralds.find((e)=>e.id===d.emeraldId)?.codigo || '—'}</td><td className="p-3">{d.persona}</td><td className="p-3 text-right font-bold text-[#063f35]">{money(d.valor)}</td><td className="p-3"><span className={`px-2 py-1 rounded-full text-xs font-bold ${d.estado === 'Completada' || d.estado === 'Aceptada' ? 'bg-emerald-100 text-emerald-800' : d.estado === 'Rechazada' || d.estado === 'Cancelada' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>{d.estado}</span></td></tr>)}</tbody></table>{!data.deals.length && <p className="p-5 text-sm text-slate-400 text-center">Todavía no hay movimientos comerciales.</p>}</div></div><form onSubmit={submit} className="bg-white border rounded-2xl p-5 h-fit shadow-sm"><h2 className="font-black text-lg mb-4 text-[#063f35]">Nuevo movimiento</h2><label className="block text-sm font-semibold mb-3">Pieza<select required className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.emeraldId} onChange={e=>setForm({...form,emeraldId:e.target.value})}><option value="">Seleccione</option>{data.emeralds.map((e)=><option key={e.id} value={e.id}>{e.codigo} · {e.nombre}</option>)}</select></label><label className="block text-sm font-semibold mb-3">Tipo<select className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.tipo} onChange={e=>setForm({...form,tipo:e.target.value})}>{['Cotización','Reserva','Venta'].map(s=><option key={s}>{s}</option>)}</select></label>{[['Cliente / contraparte','persona'],['Teléfono o correo','contacto'],['Valor acordado o cotizado','valor'],['Notas / condiciones','notas']].map(([l,k])=><label key={k} className="block text-sm font-semibold mb-3">{l}{k==='notas'?<textarea rows={3} className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/>:<input type={k==='valor'?'number':'text'} className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})}/>}</label>)}<label className="block text-sm font-semibold mb-4">Estado<select className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.estado} onChange={e=>setForm({...form,estado:e.target.value})}>{['Pendiente','Aceptada','Rechazada','Completada','Cancelada'].map(s=><option key={s}>{s}</option>)}</select></label><Button type="submit" disabled={!data.emeralds.length} className="w-full"><Plus size={16}/> Guardar movimiento</Button><p className="text-[10px] text-slate-400 mt-3 text-center uppercase tracking-wider">Registro interno - No procesa pagos</p></form></div></>;
+}
+
+function ValuationModule({ data, onAdd }) {
+  const [form, setForm] = useState({ emeraldId: '', fecha: new Date().toISOString().slice(0,10), metodo: 'Matriz orientativa documentada', color: 3, claridad: 3, talla: 3, peso: '', origen: '', observaciones: '', rangoMin: '', rangoMax: '', moneda: 'COP' });
+  const score = Number(form.color)+Number(form.claridad)+Number(form.talla);
+  const submit = (e) => { e.preventDefault(); if (!form.emeraldId) return; onAdd({ ...form, id: uid(), peso: Number(form.peso || 0), rangoMin: Number(form.rangoMin || 0), rangoMax: Number(form.rangoMax || 0) }); setForm((p)=>({...p,observaciones:'',rangoMin:'',rangoMax:''})); };
+  return <><SectionTitle icon={Scale} title="Valoración orientativa" subtitle="Documente criterios y comparables; no sustituye una tasación gemológica presencial."/><div className="grid xl:grid-cols-[430px_1fr] gap-5"><form onSubmit={submit} className="bg-white border rounded-2xl p-5 shadow-sm"><h2 className="font-black text-lg mb-4 text-[#063f35]">Nueva ficha de valoración</h2><label className="block text-sm font-semibold mb-3">Esmeralda<select required className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.emeraldId} onChange={e=>{const x=data.emeralds.find((a)=>a.id===e.target.value);setForm({...form,emeraldId:e.target.value,peso:x?.peso||''});}}><option value="">Seleccione pieza</option>{data.emeralds.map((e)=><option key={e.id} value={e.id}>{e.codigo} · {e.nombre}</option>)}</select></label><div className="grid grid-cols-3 gap-2">{[['Color','color'],['Claridad','claridad'],['Talla','talla']].map(([l,k])=><label key={k} className="text-xs font-bold">{l}<select className="mt-1 w-full border rounded-xl p-2 bg-slate-50" value={form[k]} onChange={e=>setForm({...form,[k]:Number(e.target.value)})}>{[1,2,3,4,5].map(n=><option key={n} value={n}>{n}/5</option>)}</select></label>)}</div><div className="my-4 p-3 bg-emerald-50 border border-emerald-100 rounded-xl"><div className="text-xs text-emerald-800 font-bold">PUNTAJE DESCRIPTIVO INTERNO</div><div className="text-2xl font-black text-emerald-950">{score}/15</div><p className="text-xs text-emerald-800">No es una calificación gemológica universal ni calcula precio automáticamente.</p></div><div className="grid grid-cols-2 gap-3"><label className="text-sm font-semibold">Rango mínimo (COP)<input type="number" min="0" className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.rangoMin} onChange={e=>setForm({...form,rangoMin:e.target.value})}/></label><label className="text-sm font-semibold">Rango máximo (COP)<input type="number" min="0" className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.rangoMax} onChange={e=>setForm({...form,rangoMax:e.target.value})}/></label></div><label className="block text-sm font-semibold my-3">Origen / comparables consultados<textarea rows={2} className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.origen} onChange={e=>setForm({...form,origen:e.target.value})}/></label><label className="block text-sm font-semibold mb-4">Observaciones y limitaciones<textarea rows={3} className="mt-1 w-full border rounded-xl p-3 bg-slate-50" value={form.observaciones} onChange={e=>setForm({...form,observaciones:e.target.value})}/></label><Button type="submit" disabled={!form.emeraldId} className="w-full"><Save size={16}/> Guardar valoración</Button></form><div className="bg-white border rounded-2xl p-5 shadow-sm"><h2 className="font-black text-lg mb-4 text-[#063f35]">Historial de valoraciones</h2>{data.valuations.length ? <div className="space-y-3">{data.valuations.map((v)=><div key={v.id} className="border rounded-xl p-4 hover:shadow-md transition-shadow"><div className="flex justify-between gap-3"><b className="text-slate-800">{data.emeralds.find((e)=>e.id===v.emeraldId)?.nombre || 'Pieza importada'}</b><span className="text-xs text-slate-400 font-bold bg-slate-100 px-2 py-1 rounded">{dateLabel(v.fecha)}</span></div><div className="text-[#063f35] text-lg font-black mt-2">{v.rangoMin || v.rangoMax ? `${money(v.rangoMin)} – ${money(v.rangoMax)}` : 'Sin rango monetario registrado'}</div><p className="text-sm text-slate-500 mt-1 font-medium flex gap-3"><span>Color: <b className="text-slate-700">{v.color}/5</b></span> <span>Claridad: <b className="text-slate-700">{v.claridad}/5</b></span> <span>Talla: <b className="text-slate-700">{v.talla}/5</b></span></p><p className="text-xs text-slate-500 mt-3 bg-slate-50 p-2 rounded">{v.observaciones || 'Sin observaciones adicionales.'}</p></div>)}</div> : <Empty title="Sin valoraciones" text="Registre criterios observados, comparables y limitaciones para construir un historial transparente."/>}</div></div></>;
+}
+
+function Passport({ emerald, events, valuations, onBack }) {
+  if (!emerald) return <><SectionTitle icon={QrCode} title="Pasaporte de pieza" subtitle="Ficha técnica y trazabilidad."/><Empty title="No hay esmeraldas registradas" text="Cree una ficha en el inventario para generar su pasaporte interno." action={<Button onClick={onBack}>Ir a Inventario</Button>}/></>;
+  
+  const history = events.filter((e)=>e.emeraldId===emerald.id).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const vals = valuations.filter((v)=>v.emeraldId===emerald.id);
+  const print = () => window.print();
+
+  // QR Code Real usando la API
+  const publicUrl = `${window.location.origin}/esmeralda/${emerald.id}`;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(publicUrl)}&color=063f35`;
+
+  return <><SectionTitle icon={QrCode} title="Pasaporte de trazabilidad" subtitle="Documento escaneable imprimible. Verifique permisos antes de compartir." action={<Button variant="light" onClick={onBack}><ChevronLeft size={16}/> Volver al inventario</Button>}/><div className="max-w-4xl mx-auto bg-white border rounded-3xl overflow-hidden shadow-lg"><div className="bg-[#063f35] text-white p-7 md:p-9 flex flex-col md:flex-row gap-6 relative overflow-hidden">
+    <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -mt-20 -mr-20"></div>
+    <div className="w-40 h-40 rounded-2xl bg-emerald-950/60 overflow-hidden grid place-items-center shrink-0 z-10 border-4 border-white/10">{emerald.foto?<img src={emerald.foto} className="w-full h-full object-cover"/>:<Gem size={65} className="text-emerald-200"/>}</div><div className="flex-1 z-10"><div className="text-amber-300 text-xs tracking-[.2em] font-bold">ESMERALDA INTELIGENTE · V4 CLOUD</div><h2 className="text-3xl md:text-4xl font-black mt-2 leading-tight">{emerald.nombre}</h2><div className="font-mono text-amber-300 mt-2 text-lg">{emerald.codigo}</div><div className="flex flex-wrap gap-2 mt-5"><span className="bg-white/20 backdrop-blur px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider">{emerald.estado}</span><span className="bg-[#D4AF37] text-[#063f35] px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider">{emerald.estadoComercial}</span></div></div></div><div className="p-7 grid md:grid-cols-2 gap-8">
+      
+      {/* Columna Izquierda */}
+      <div>
+        <h3 className="font-black mb-4 text-[#063f35] flex items-center gap-2 border-b pb-2"><FileText size={18} className="text-amber-500"/> Características Gemológicas</h3>
+        <dl className="grid grid-cols-2 gap-3 text-sm">{[['Peso',`${emerald.peso} ct`],['Color',emerald.color],['Transparencia',emerald.transparencia],['Forma',emerald.forma||'No registrada'],['Dimensiones',emerald.dimensiones||'No registradas'],['Tratamiento',emerald.tratamiento],['Origen declarado',emerald.origen||'No registrado'],['Ubicación',emerald.ubicacion||'No registrada']].map(([k,v])=><div key={k} className="bg-slate-50 border border-slate-100 rounded-xl p-3"><dt className="text-xs text-slate-500">{k}</dt><dd className="font-bold text-slate-800 mt-1">{v}</dd></div>)}</dl>
+        
+        {emerald.certificados?.length > 0 && (
+          <div className="mt-6">
+            <h3 className="font-black mb-3 text-[#063f35] text-sm">Certificados Adjuntos ({emerald.certificados.length})</h3>
+            <div className="flex flex-wrap gap-2">
+               {emerald.certificados.map((c, i) => (
+                 <a key={c.id} href={c.data} target="_blank" rel="noreferrer" className="text-xs bg-emerald-50 text-emerald-800 px-3 py-2 rounded-lg border border-emerald-200 font-bold flex items-center gap-1 hover:bg-emerald-100 transition-colors"><Paperclip size={12}/> Documento {i+1}</a>
+               ))}
+            </div>
+          </div>
+        )}
+      </div>
+      
+      {/* Columna Derecha */}
+      <div>
+        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 flex flex-col items-center justify-center mb-8">
+            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Código QR de Trazabilidad</h4>
+            <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-200">
+              <img src={qrUrl} alt="QR Code Pasaporte" className="w-40 h-40 object-contain" />
+            </div>
+            <p className="text-xs text-center text-slate-400 mt-4 max-w-[200px]">
+              Escanee para acceder a la ficha digital autorizada.
+            </p>
+        </div>
+
+        <h3 className="font-black mb-3 text-[#063f35] flex items-center gap-2 border-b pb-2"><History size={18} className="text-amber-500"/> Historial de trazabilidad</h3>{history.length?<div className="space-y-3">{history.map((h)=><div key={h.id} className="border-l-2 border-amber-400 pl-3"><b className="text-sm text-slate-800">{h.etapa}</b><p className="text-xs text-slate-500">{dateLabel(h.fecha)} · {h.detalle}</p></div>)}</div>:<p className="text-sm text-slate-400 italic">No hay eventos documentados.</p>}
+      </div>
+    </div><div className="border-t bg-slate-50 p-6 flex flex-wrap items-center justify-between gap-4"><div className="flex items-start gap-3 max-w-xl"><Info size={20} className="text-amber-500 shrink-0 mt-0.5"/><p className="text-xs text-slate-500 leading-relaxed">Este pasaporte es generado por el usuario mediante <b>ESMERALDA INTELIGENTE JAIRRESTAURA</b>. No constituye certificado de laboratorio gemológico, prueba legal de origen, garantía de autenticidad, declaración jurada de tratamiento ni tasación financiera oficial.</p></div><Button onClick={print} className="shrink-0"><Printer size={16}/> Imprimir / Guardar PDF</Button></div></div><style>{`@media print { aside, header, button { display:none !important } main { width:100% !important; padding: 0 !important; overflow: visible !important; } body { background:white; } .p-4, .md\\:p-8 { padding: 0 !important; } }`}</style></>;
+}
+
+// ==========================================
+// MÓDULO NUEVO: ASISTENTES IA (GEMINI)
+// ==========================================
+function AsistentesIAModule() {
+  const [activeAgent, setActiveAgent] = useState('Gemólogo');
+  const [messages, setMessages] = useState([
+    { role: 'assistant', content: 'Hola, soy tu Gemólogo IA. Estoy aquí para orientarte sobre características físicas, inclusiones y tratamientos de las esmeraldas. ¿Qué necesitas consultar?' }
+  ]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const endOfMessagesRef = useRef(null);
+
+  const agents = [
+    { id: 'Gemólogo', icon: <Gem size={18}/>, desc: 'Orientación sobre características gemológicas', prompt: 'Eres un experto gemólogo especializado en esmeraldas colombianas. Responde dudas sobre color, claridad, inclusiones (como las trifásicas), talla, y tratamientos (aceite, resina). Sé profesional, claro y objetivo. Siempre aclara que tus respuestas son orientativas y no reemplazan un certificado de laboratorio presencial.' },
+    { id: 'Valorador', icon: <Scale size={18}/>, desc: 'Factores de precio y mercado', prompt: 'Eres un experto valorador de esmeraldas. Orientas sobre los factores que influyen en el precio (Color, Claridad, Corte, Quilataje, Origen, Tratamientos). No debes dar cifras de dinero exactas, pero sí explicar cómo se tasa una piedra y las tendencias del mercado. Sé honesto sobre la imposibilidad de tasar con precisión solo por fotos.' },
+    { id: 'Comerciante', icon: <Handshake size={18}/>, desc: 'Estrategias de venta y exportación', prompt: 'Eres un experto comerciante internacional de esmeraldas de Colombia. Das consejos sobre cómo negociar, qué documentos se requieren para exportar, y cómo presentar una piedra a un comprador. Promueve prácticas éticas y transparentes.' }
+  ];
+
+  const handleAgentChange = (agentId) => {
+    setActiveAgent(agentId);
+    let initialMsg = '';
+    if (agentId === 'Gemólogo') initialMsg = 'Hola, soy tu Gemólogo IA. Estoy aquí para orientarte sobre características físicas, inclusiones y tratamientos de las esmeraldas. ¿Qué necesitas consultar?';
+    if (agentId === 'Valorador') initialMsg = 'Hola, soy tu Valorador IA. Te guiaré sobre los factores que definen el valor de una esmeralda en el mercado actual. Recuerda que no realizo tasaciones oficiales. ¿En qué te ayudo?';
+    if (agentId === 'Comerciante') initialMsg = 'Hola, soy tu Comerciante IA. Te asesoraré sobre estrategias de venta, negociación y requisitos de exportación. ¿Cuál es tu duda comercial?';
+    setMessages([{ role: 'assistant', content: initialMsg }]);
+  };
+
+  useEffect(() => {
+    endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
+
+  const handleSend = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || loading) return;
+
+    const userText = input;
+    setInput('');
+    setMessages(prev => [...prev, { role: 'user', content: userText }]);
+    setLoading(true);
+
+    try {
+      const apiKey = ""; // Canvas inyectará la API Key automáticamente
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+      const systemInstruction = agents.find(a => a.id === activeAgent).prompt;
+
+      const contents = messages.map(m => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }]
+      }));
+      contents.push({ role: 'user', parts: [{ text: userText }] });
+
+      const payload = { contents, systemInstruction: { parts: [{ text: systemInstruction }] } };
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+      
+      if (data.candidates && data.candidates[0].content) {
+        const text = data.candidates[0].content.parts[0].text;
+        setMessages(prev => [...prev, { role: 'assistant', content: text }]);
+      } else {
+        throw new Error("Respuesta inválida de Gemini");
+      }
+    } catch (error) {
+      console.error(error);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Lo siento, hubo un error de conexión con la Inteligencia Artificial. Por favor, intenta de nuevo más tarde.' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return <><SectionTitle icon={Bot} title="Asistentes Inteligentes" subtitle="Consulta en tiempo real con expertos virtuales impulsados por Gemini AI."/>
+    <div className="flex flex-col md:flex-row gap-6 h-[600px]">
+      <div className="w-full md:w-72 bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex flex-col gap-3 shrink-0">
+        <h3 className="font-black text-[#063f35] mb-2 px-2 text-sm uppercase tracking-widest">Elige tu experto</h3>
+        {agents.map(agent => (
+          <button
+            key={agent.id}
+            onClick={() => handleAgentChange(agent.id)}
+            className={`flex flex-col items-start p-4 rounded-xl transition-all border text-left
+              ${activeAgent === agent.id 
+                ? 'bg-[#063f35] text-white border-[#063f35] shadow-md shadow-emerald-900/20' 
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300'}`}
+          >
+            <div className="flex items-center gap-2 font-bold mb-1">
+              <span className={activeAgent === agent.id ? "text-amber-400" : "text-[#063f35]"}>{agent.icon}</span>
+              {agent.id} IA
+            </div>
+            <span className={`text-xs leading-relaxed ${activeAgent === agent.id ? 'text-emerald-100' : 'text-slate-500'}`}>
+              {agent.desc}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+        <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-black text-[#063f35]">Chat con {activeAgent}</h2>
+            <p className="text-xs text-slate-500 mt-1">Generado por Gemini AI. No reemplaza asesoría humana profesional.</p>
+          </div>
+          <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center">
+            <Sparkles size={18}/>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50">
+          {messages.map((msg, idx) => (
+            <div key={idx} className={`flex gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              {msg.role === 'assistant' && (
+                <div className="w-10 h-10 rounded-full bg-[#063f35] flex items-center justify-center shrink-0 shadow-sm text-amber-400 border-2 border-white">
+                  <Bot size={20} />
+                </div>
+              )}
+              
+              <div className={`max-w-[85%] rounded-2xl px-5 py-4 text-sm leading-relaxed shadow-sm
+                ${msg.role === 'user' 
+                  ? 'bg-emerald-800 text-white rounded-tr-sm font-medium' 
+                  : 'bg-white border border-slate-200 text-slate-700 rounded-tl-sm'}`}>
+                {msg.content.split('\n').map((line, i) => (
+                  <span key={i}>{line}<br/></span>
+                ))}
+              </div>
+
+              {msg.role === 'user' && (
+                <div className="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center shrink-0 shadow-sm text-slate-500 border-2 border-white">
+                  <User size={20} />
+                </div>
+              )}
+            </div>
+          ))}
+          {loading && (
+            <div className="flex gap-4 justify-start animate-pulse">
+              <div className="w-10 h-10 rounded-full bg-[#063f35]/50 flex items-center justify-center shrink-0"></div>
+              <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-sm px-6 py-5 w-32 shadow-sm">
+                <div className="flex space-x-2 justify-center">
+                  <div className="w-2 h-2 bg-[#063f35]/40 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-[#063f35]/40 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                  <div className="w-2 h-2 bg-[#063f35]/40 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={endOfMessagesRef} />
+        </div>
+
+        <form onSubmit={handleSend} className="p-4 bg-white border-t border-slate-200">
+          <div className="flex gap-3 relative">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Escribe tu consulta al experto aquí..."
+              className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-4 py-3.5 pr-14 focus:outline-none focus:ring-2 focus:ring-[#063f35] focus:bg-white transition-all text-sm font-medium"
+            />
+            <button 
+              type="submit"
+              disabled={!input.trim() || loading}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center bg-[#063f35] text-amber-400 rounded-lg hover:bg-emerald-800 disabled:opacity-50 disabled:hover:bg-[#063f35] transition-colors"
+            >
+              <Send size={18} className="ml-1" />
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </>;
+}
+
+function Academy() {
+  const [open, setOpen] = useState(0);
+  const visualStages = [
+    { title: 'Esmeralda en bruto', phase: 'Recepción e inspección', src: 'https://images.pexels.com/photos/35451979/pexels-photo-35451979.jpeg?cs=srgb&fm=jpg&w=1200', credit: 'Foto: Mr. Pugo / Pexels', note: 'Registrar forma natural, fracturas visibles, color observado y peso inicial.' },
+    { title: 'Gema facetada en joyería', phase: 'Talla y acabado', src: 'https://images.unsplash.com/photo-1583937443351-f2f669fbe2cf?auto=format&fit=crop&fm=jpg&q=80&w=1200', credit: 'Foto: Unsplash', note: 'Comparar dimensiones y peso antes y después; conservar imágenes del proceso.' },
+    { title: 'Pieza engastada', phase: 'Montaje y entrega', src: 'https://images.pexels.com/photos/6263157/pexels-photo-6263157.jpeg?cs=srgb&fm=jpg&w=1200', credit: 'Foto: Tima Miroshnichenko / Pexels', note: 'Documentar diseño, taller, materiales declarados y estado final de la joya.' }
+  ];
+  const guideSections = [
+    { title: '1. Recepción y registro', text: 'Asigne un código único antes de mover o transformar la pieza. Registre fecha, persona que entrega, procedencia declarada, peso, fotografías generales y detalles visibles. No presente la procedencia declarada como origen certificado.' },
+    { title: '2. Inspección inicial', text: 'Observe la pieza con iluminación blanca y difusa, lupa gemológica y, cuando corresponda, instrumentos adecuados. Registre color, transparencia, inclusiones, fracturas visibles, forma y dimensiones. No confunda una observación visual con un diagnóstico de laboratorio.' },
+    { title: '3. Clasificación', text: 'Separe material por estado, calidad visual preliminar, tamaño, integridad y destino posible. Documente quién clasificó, cuándo y con qué criterios.' },
+    { title: '4. Corte y talla', text: 'Antes de cualquier intervención, documente peso y dimensiones de entrada, objetivo de talla, responsable y autorización. Después registre peso final, pérdida de material, forma obtenida y fotografías comparables.' },
+    { title: '5. Engaste y transformación', text: 'Registre el diseño, metal declarado, taller, fecha, costos, peso de la gema antes y después y estado final. Mantenga fotografías antes del engaste para facilitar identificación.' },
+    { title: '6. Valoración y oferta', text: 'Documente los factores observados, comparables verificables, rango orientativo y limitaciones. No convierta una estimación en tasación oficial.' }
+  ];
+
+  return <><SectionTitle icon={GraduationCap} title="Academia esmeraldera" subtitle="Manual práctico de documentación, gemología básica y buenas prácticas."/><div className="grid md:grid-cols-3 gap-4 mb-6">{visualStages.map((v,i)=><article key={v.title} className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm"><div className="h-48 bg-emerald-950"><img src={v.src} alt={v.title} loading="lazy" className="w-full h-full object-cover" onError={(e)=>{e.currentTarget.style.display='none';}}/></div><div className="p-5"><div className="text-[10px] font-bold tracking-[.16em] text-[#063f35] mb-2">ETAPA {i+1} · {v.phase.toUpperCase()}</div><h3 className="font-black text-lg text-slate-800">{v.title}</h3><p className="text-sm text-slate-600 mt-2 leading-relaxed">{v.note}</p></div></article>)}</div><div className="grid lg:grid-cols-[1fr_320px] gap-5"><div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">{guideSections.map((s,i)=><div key={s.title} className="border-b border-slate-100 last:border-0"><button onClick={()=>setOpen(open===i?-1:i)} className="w-full text-left p-5 flex items-center gap-4 hover:bg-slate-50 transition-colors"><div className="w-10 h-10 rounded-xl bg-emerald-50 text-[#063f35] grid place-items-center font-black shrink-0">{i+1}</div><b className="flex-1 text-slate-800">{s.title}</b><ChevronRight className={`transition text-slate-400 ${open===i?'rotate-90':''}`} size={18}/></button>{open===i&&<div className="px-5 pb-6 pl-[4.5rem] text-sm text-slate-600 leading-relaxed bg-slate-50/50 border-t border-slate-50">{s.text}</div>}</div>)}</div><div className="space-y-4"><div className="bg-[#063f35] text-white rounded-2xl p-6 shadow-sm"><BookMarked className="text-amber-400 mb-2"/><h3 className="font-black text-lg mt-2">Principio de documentación</h3><p className="text-sm text-emerald-100/90 mt-2 leading-relaxed">Cada afirmación importante debe tener fecha, responsable, soporte y nivel de certeza. La trazabilidad genera confianza en el mercado global.</p></div><div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm"><h3 className="font-black mb-3 text-[#063f35]">Vocabulario clave</h3><ul className="text-sm text-slate-600 space-y-3"><li><b className="text-slate-800">Inclusión:</b> Característica interna (solido, líquido, gas) visible bajo observación.</li><li><b className="text-slate-800">Quilate (ct):</b> Unidad de masa para gemas (1 ct = 0,2 g).</li><li><b className="text-slate-800">Tratamiento:</b> Procedimiento que mejora la apariencia (aceite, resina) y que DEBE declararse.</li></ul></div><div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-sm text-amber-900 flex gap-3"><AlertTriangle className="shrink-0 text-amber-600"/><div><b>Nota de rigor:</b> Esta academia es material introductorio. Para identificar tratamientos o certificar origen se requiere laboratorio competente.</div></div></div></div></>;
+}
+
+function Reports({ data, exportBackup, importRef, onImport }) {
+  const csv = () => { const head = ['codigo','nombre','estado','estadoComercial','peso_ct','color','transparencia','origen','tratamiento','precioSolicitado']; const rows = data.emeralds.map((e)=>[e.codigo,e.nombre,e.estado,e.estadoComercial,e.peso,e.color,e.transparencia,e.origen,e.tratamiento,e.precioSolicitado]); const q = (v) => `"${String(v??'').replaceAll('"','""')}"`; downloadFile('inventario-v4-esmeraldas.csv',[head,...rows].map(r=>r.map(q).join(';')).join('\n'),'text/csv;charset=utf-8'); };
+  return <><SectionTitle icon={FileBarChart2} title="Informes y respaldos" subtitle="Exporte su información para contabilidad o combine datos externos a su nube."/><div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5"><div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm"><Database className="text-emerald-800 mb-2"/><h3 className="font-black text-lg mt-2 text-[#063f35]">Inventario en CSV</h3><p className="text-sm text-slate-500 mt-2 mb-6 h-10">Ideal para abrir en Excel y compartir con contabilidad.</p><Button onClick={csv} className="w-full"><Download size={16}/> Descargar Excel/CSV</Button></div><div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm"><ShieldCheck className="text-emerald-800 mb-2"/><h3 className="font-black text-lg mt-2 text-[#063f35]">Respaldo JSON</h3><p className="text-sm text-slate-500 mt-2 mb-6 h-10">Copia de seguridad local total (Fichas, IA, Eventos).</p><Button onClick={exportBackup} className="w-full"><Download size={16}/> Descargar copia de seguridad</Button></div><div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm"><Upload className="text-amber-600 mb-2"/><h3 className="font-black text-lg mt-2 text-[#063f35]">Importar a la Nube</h3><p className="text-sm text-slate-500 mt-2 mb-6 h-10">Sube un JSON anterior a tu base de datos Firebase V4.</p><Button variant="light" onClick={()=>importRef.current?.click()} className="w-full border-amber-300 text-amber-700 hover:bg-amber-50"><Upload size={16}/> Seleccionar JSON</Button></div></div><div className="bg-[#063f35] rounded-2xl p-6 mt-6 shadow-sm text-white"><h3 className="font-black mb-6 text-amber-400">Resumen del sistema en la Nube</h3><div className="grid grid-cols-2 md:grid-cols-4 gap-4">{[['Piezas Totales',data.emeralds.length],['Eventos Históricos',data.events.length],['Valoraciones',data.valuations.length],['Movimientos',data.deals.length]].map(([l,v])=><div key={l} className="bg-white/10 backdrop-blur rounded-xl p-5 border border-white/10"><div className="text-xs text-emerald-200 uppercase tracking-wider font-bold">{l}</div><div className="text-3xl font-black mt-2">{v}</div></div>)}</div></div></>;
+}
+
+function Security({ data, exportBackup, importRef, onImport, onGoogleSignIn, user }) {
+  return <><SectionTitle icon={ShieldCheck} title="Privacidad y seguridad" subtitle="Gestión de tu identidad en la plataforma y protección de datos V4."/><div className="grid lg:grid-cols-2 gap-5"><div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm"><h2 className="font-black text-lg mb-5 text-[#063f35]">Estado de la Conexión</h2>
+    
+    <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 mb-6">
+      <div className="flex items-center gap-3 mb-2">
+        {user?.isAnonymous ? <User className="text-emerald-700"/> : <CheckCircle2 className="text-emerald-700"/>}
+        <h3 className="font-bold text-emerald-900">{user?.isAnonymous ? 'Sesión Anónima Activa' : 'Cuenta Vinculada (Google)'}</h3>
+      </div>
+      <p className="text-sm text-emerald-800 leading-relaxed">
+        {user?.isAnonymous 
+          ? 'Estás utilizando una cuenta anónima segura. Tus datos se guardan en la nube bajo una ID única temporal. Si cambias de navegador, perderás el acceso a menos que vincules tu cuenta.' 
+          : 'Tus datos están protegidos y sincronizados de forma permanente con tu cuenta de Google.'}
+      </p>
+    </div>
+
+    {user?.isAnonymous && (
+      <div className="border border-amber-200 bg-amber-50 rounded-xl p-5">
+        <h4 className="font-bold text-amber-900 mb-2">Recomendación V4: Vincular Cuenta</h4>
+        <p className="text-sm text-amber-800 mb-4">Vincula voluntariamente tu cuenta de Google para asegurar que nunca pierdas tus datos y puedas acceder desde tu celular o tablet. Sigue siendo 100% gratuito.</p>
+        <Button onClick={onGoogleSignIn} className="w-full bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"><LogIn size={18} className="text-amber-500"/> Vincular con Google (Opcional)</Button>
+      </div>
+    )}
+
+  </div><div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm"><h2 className="font-black text-lg mb-5 text-[#063f35]">Respaldo Manual</h2><p className="text-sm text-slate-600 mb-6">Aunque V4 utiliza Firestore para guardado automático, siempre es buena práctica descargar tu propio respaldo JSON.</p><div className="space-y-3"><Button onClick={exportBackup} className="w-full bg-[#063f35] hover:bg-emerald-900"><Download size={16}/> Descargar JSON Local</Button><div><Button variant="light" onClick={()=>importRef.current?.click()} className="w-full"><Upload size={16}/> Restaurar desde archivo</Button></div></div><div className="mt-6 pt-6 border-t border-slate-100 flex gap-3 text-sm text-slate-500"><Info className="shrink-0 text-slate-400 mt-0.5"/><p>Evite registrar claves, números de tarjetas o información altamente sensible en los campos de "Notas" o "Propietarios".</p></div></div></div></>;
+}
